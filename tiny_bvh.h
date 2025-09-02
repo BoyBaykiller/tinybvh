@@ -2409,6 +2409,13 @@ void BVH::Build( uint32_t nodeIdx, uint32_t depth )
 	}
 }
 
+inline float MMAt(__m128 V, int i)
+{
+	float arr[4];
+	_mm_store_ps(arr, V);
+	return arr[i];
+}
+
 // Full-sweep SAH builder.
 // Instead of using binning, this builder evaluates all possible split plane
 // candidates for each axis. Not efficient; e.g. sorting for each split can
@@ -2452,15 +2459,21 @@ void BVH::BuildFullSweep()
 			for (uint32_t a = 0; a < 3; a++) if (extent[a] > minDim[a])
 			{
 				// sweep from right to left
-				bvhvec3 Rmin( BVH_FAR ), Rmax( -BVH_FAR );
+				__m128 Rmin = { BVH_FAR , BVH_FAR , BVH_FAR , BVH_FAR };
+				__m128 Rmax = { -BVH_FAR , -BVH_FAR , -BVH_FAR , -BVH_FAR };
+
 				uint32_t firstRightTri = 1;
 				for (uint32_t i = 0; i < node.triCount; i++)
 				{
 					const uint32_t fi = sortedIdx[a][node.leftFirst + node.triCount - i - 1];
-					const float SAR = (float)i * tinybvh_half_area( Rmax - Rmin ) * rSAV;
+
+					__m128 size = _mm_sub_ps(Rmax, Rmin);
+					const float SAR = (float)i * tinybvh_half_area(bvhvec3{ MMAt(size, 0), MMAt(size, 1), MMAt(size, 2) }) * rSAV;
+					
 					SARs[node.triCount - i - 1] = SAR;
-					Rmin = tinybvh_min( Rmin, fragment[fi].bmin );
-					Rmax = tinybvh_max( Rmax, fragment[fi].bmax );
+
+					Rmin = _mm_min_ps(Rmin, _mm_load_ps(&fragment[fi].bmin.x));
+					Rmax = _mm_max_ps(Rmax, _mm_load_ps(&fragment[fi].bmax.x));
 					if (SAR >= splitCost)
 					{
 						// Right side's cost is already greater than lowest cost and will only increase. Stop early
@@ -2469,19 +2482,23 @@ void BVH::BuildFullSweep()
 					}
 				}
 				// sweep from left to right
-				bvhvec3 Lmin( BVH_FAR ), Lmax( -BVH_FAR );
+				__m128 Lmin = { BVH_FAR, BVH_FAR, BVH_FAR, BVH_FAR };
+				__m128 Lmax = { -BVH_FAR , -BVH_FAR , -BVH_FAR , -BVH_FAR };
 				for (uint32_t i = 0; i < firstRightTri - 1; i++)
 				{
 					const uint32_t fi = sortedIdx[a][node.leftFirst + i];
-					Lmin = tinybvh_min( Lmin, fragment[fi].bmin );
-					Lmax = tinybvh_max( Lmax, fragment[fi].bmax );
+					Lmin = _mm_min_ps(Lmin, _mm_load_ps(&fragment[fi].bmin.x));
+					Lmax = _mm_max_ps(Lmax, _mm_load_ps(&fragment[fi].bmax.x));
 				}
 				for (uint32_t i = firstRightTri - 1; i < node.triCount - 1; i++)
 				{
 					const uint32_t fi = sortedIdx[a][node.leftFirst + i];
-					Lmin = tinybvh_min( Lmin, fragment[fi].bmin );
-					Lmax = tinybvh_max( Lmax, fragment[fi].bmax );
-					const float SAL = (float)(i + 1) * tinybvh_half_area( Lmax - Lmin ) * rSAV;
+					Lmin = _mm_min_ps(Lmin, _mm_load_ps(&fragment[fi].bmin.x));
+					Lmax = _mm_max_ps(Lmax, _mm_load_ps(&fragment[fi].bmax.x));
+
+					__m128 size = _mm_sub_ps(Lmin, Lmax);
+
+					const float SAL = (float)(i + 1) * tinybvh_half_area(bvhvec3{ MMAt(size, 0), MMAt(size, 1), MMAt(size, 2) }) * rSAV;
 					const float C = SAL + SARs[i];
 
 					if (C < splitCost) splitCost = C, splitPos = i + 1, splitAxis = a;
